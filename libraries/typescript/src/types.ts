@@ -187,8 +187,10 @@ export interface DeviceSettingsFeature {
 
 /** Protocol supports on-device recording control. */
 export interface RecordFeature {
-  startRecord(): Promise<void>;
-  stopRecord(): Promise<void>;
+  startRecord():  Promise<void>;
+  stopRecord():   Promise<void>;
+  pauseRecord?(): Promise<void>;
+  resumeRecord?(): Promise<void>;
 }
 
 // ── Protocol commands ───────────────────────────────────────────────────────────

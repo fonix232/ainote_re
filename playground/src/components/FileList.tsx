@@ -1,3 +1,5 @@
+import { Play, Download, Trash2, X, Cpu } from 'lucide-preact';
+
 export interface FileEntry {
   id: string;
   label: string;
@@ -45,19 +47,19 @@ function FileEntryRow({ entry }: { entry: FileEntry }) {
         </div>
         <div class="flex gap-0.5 shrink-0">
           {entry.canPlay && (
-            <button class="btn btn-xs btn-ghost px-1.5" title="Play" onClick={entry.onPlay}>▶</button>
+            <button class="btn btn-xs btn-ghost px-1.5" title="Play" onClick={entry.onPlay}><Play size={13} /></button>
           )}
           {entry.onPlayFfmpeg && (
-            <button class="btn btn-xs btn-ghost px-1.5" title="Play via FFmpeg" onClick={entry.onPlayFfmpeg}>F▶</button>
+            <button class="btn btn-xs btn-ghost px-1.5" title="Play via FFmpeg" onClick={entry.onPlayFfmpeg}><Cpu size={13} /></button>
           )}
           {entry.onDownload && (
-            <button class="btn btn-xs btn-ghost px-1.5" title="Download" disabled={!!entry.downloadDisabled} onClick={entry.onDownload}>⬇</button>
+            <button class="btn btn-xs btn-ghost px-1.5" title="Download" disabled={!!entry.downloadDisabled} onClick={entry.onDownload}><Download size={13} /></button>
           )}
           {entry.onDeviceDelete && (
-            <button class="btn btn-xs btn-ghost px-1.5 text-error hover:bg-error/10" title="Delete from device" onClick={entry.onDeviceDelete}>🗑</button>
+            <button class="btn btn-xs btn-ghost px-1.5 text-error hover:bg-error/10" title="Delete from device" onClick={entry.onDeviceDelete}><Trash2 size={13} /></button>
           )}
           {entry.onDelete && (
-            <button class="btn btn-xs btn-ghost px-1.5 text-base-content/30" title="Remove from cache" onClick={entry.onDelete}>✕</button>
+            <button class="btn btn-xs btn-ghost px-1.5 text-base-content/30" title="Remove from cache" onClick={entry.onDelete}><X size={13} /></button>
           )}
         </div>
       </div>

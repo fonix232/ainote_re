@@ -7,6 +7,7 @@ import { SpeexCodec } from './codec/speex.js';
 import type { AudioCodec } from './codec/types.js';
 import type { AudioFormat, FileDownload } from '@ainote/protocols';
 import { store } from '../store/index.js';
+import { whisper } from './whisper.js';
 
 // ── AudioContext + AnalyserNode ──────────────────────────────────────────────
 
@@ -17,6 +18,8 @@ let _animFrame: number | null = null;
 let _nextTime   = 0;
 let _endTimer:         ReturnType<typeof setTimeout> | null = null;
 let _lastPlayed: FileDownload | null = null;
+let _lastBuffer: AudioBuffer | null = null;
+let _lastPcm: { data: Float32Array; sampleRate: number } | null = null;
 let _playStartCtxTime = 0;
 const LOOKAHEAD = 0.05;
 
@@ -155,35 +158,149 @@ function sbcFrameSize(data: Uint8Array): number | null {
 
 // ── Codec factory ─────────────────────────────────────────────────────────────
 
+/**
+ * Streaming MP3 decoder for live BLE audio (MPEG V2 L3, 32kbps 16kHz mono).
+ *
+ * Strategy:
+ *  1. Buffer incoming BLE notification bytes.
+ *  2. Find the first MPEG sync word (FF F2/F3) to align the stream.
+ *  3. Collect BATCH_FRAMES complete 288-byte frames at a time.
+ *  4. Decode via decodeAudioData on a serialised promise chain so batches
+ *     are always scheduled in arrival order, even though decode is async.
+ */
+class Mp3StreamCodec implements AudioCodec {
+  readonly sampleRate = 16000;
+  readonly streaming  = true;
+
+  // MPEG V2 Layer III, 32kbps, 16kHz, mono: frame = 288 bytes ≈ 72 ms
+  private static readonly FRAME_BYTES  = 288;
+  private static readonly BATCH_FRAMES = 14; // ~1 s per batch
+
+  private _onPcm: ((f32: Float32Array, sr: number) => void) | null = null;
+  private _buf   = new Uint8Array(0);
+  private _ctx:  AudioContext | null = null;
+  private _synced = false;
+  private _decodeChain = Promise.resolve(); // serialised: keeps batches in order
+
+  open(onPcm?: (f32: Float32Array, sr: number) => void): void {
+    this._onPcm   = onPcm ?? null;
+    this._ctx     = ensureAudioCtx();
+    this._buf     = new Uint8Array(0);
+    this._synced  = false;
+    this._decodeChain = Promise.resolve();
+    console.log('[Mp3Stream] opened');
+  }
+
+  decode(bytes: Uint8Array): Float32Array | null {
+    const tmp = new Uint8Array(this._buf.length + bytes.length);
+    tmp.set(this._buf);
+    tmp.set(bytes, this._buf.length);
+    this._buf = tmp;
+
+    // Align to first MPEG sync word (FF F2 / FF F3)
+    if (!this._synced) {
+      const idx = this._findSync(this._buf);
+      if (idx < 0) {
+        // Retain last byte in case it's the start of a split sync word
+        this._buf = this._buf.length > 0 ? this._buf.slice(-1) : new Uint8Array(0);
+        return null;
+      }
+      if (idx > 0) console.log(`[Mp3Stream] sync word found at offset ${idx}, discarding ${idx}B of preamble`);
+      this._buf   = this._buf.slice(idx);
+      this._synced = true;
+    }
+
+    const BATCH = Mp3StreamCodec.FRAME_BYTES * Mp3StreamCodec.BATCH_FRAMES;
+    while (this._buf.length >= BATCH) {
+      const batch = this._buf.slice(0, BATCH); // slice → own buffer
+      this._buf   = this._buf.slice(BATCH);
+      this._decodeChain = this._decodeChain.then(() => this._decodeAudio(batch));
+    }
+    return null;
+  }
+
+  private _findSync(buf: Uint8Array): number {
+    // Accept FF F2 and FF F3 (MPEG V2 Layer III, with/without CRC)
+    for (let i = 0; i < buf.length - 1; i++) {
+      if (buf[i] === 0xFF && (buf[i + 1]! === 0xF2 || buf[i + 1]! === 0xF3)) return i;
+    }
+    return -1;
+  }
+
+  private async _decodeAudio(data: Uint8Array): Promise<void> {
+    const ctx   = this._ctx;
+    const onPcm = this._onPcm;
+    if (!ctx || !onPcm) return;
+    try {
+      const decoded = await ctx.decodeAudioData(data.buffer.slice(0, data.byteLength) as ArrayBuffer);
+      console.log(`[Mp3Stream] decoded ${data.length}B → ${decoded.duration.toFixed(2)}s @ ${decoded.sampleRate}Hz`);
+      onPcm(decoded.getChannelData(0), decoded.sampleRate);
+    } catch (e) {
+      const head = Array.from(data.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      console.warn(`[Mp3Stream] decodeAudioData failed (${data.length}B, head=[${head}]):`, e);
+      // Re-sync on next decode() call
+      this._synced = false;
+      this._buf    = new Uint8Array(0);
+    }
+  }
+
+  close(): void {
+    console.log('[Mp3Stream] closed');
+    this._buf   = new Uint8Array(0);
+    this._onPcm = null;
+    this._ctx   = null;
+    this._synced = false;
+    this._decodeChain = Promise.resolve();
+  }
+}
+
 function makeCodec(format: AudioFormat): AudioCodec {
   const { type, sampleRate = 48000 } = format.codec;
   switch (type) {
-    case 'sbc':   return new SbcCodec(sampleRate);
-    case 'speex': return new SpeexCodec() as unknown as AudioCodec;
-    default:      return new OpusCodec();
+    case 'sbc':         return new SbcCodec(sampleRate);
+    case 'speex':       return new SpeexCodec() as unknown as AudioCodec;
+    case 'passthrough': return new Mp3StreamCodec();
+    default:            return new OpusCodec();
   }
 }
 
 // ── Active codec session (live BLE streaming) ─────────────────────────────────
 
 let _codec: AudioCodec | null = null;
+let _pushFrameCount = 0;
 
 export function startStreaming(format: AudioFormat): void {
+  console.log(`[player] startStreaming: format=${format.slug}, codec=${format.codec.type}`);
   stop();
   _codec = makeCodec(format);
   const ctx = ensureAudioCtx();
   resetClock();
   _playStartCtxTime = ctx.currentTime;
+  _pushFrameCount = 0;
   store.audio.duration.value = null;
-  _codec.open((f32, sr) => scheduleF32(f32, sr));
+  whisper.resetLive(format.codec.sampleRate ?? 16000);
+  _codec.open((f32, sr) => {
+    scheduleF32(f32, sr);
+    whisper.pushLivePcm(f32, sr);
+  });
   startVisualizer();
   store.audio.playbackState.value = 'playing';
 }
 
 export function pushFrame(bytes: Uint8Array): void {
-  if (!_codec) return;
+  if (!_codec) {
+    if (_pushFrameCount === 0) console.warn('[player] pushFrame: no active codec — startStreaming was not called');
+    _pushFrameCount++;
+    return;
+  }
+  _pushFrameCount++;
+  if (_pushFrameCount === 1) console.log(`[player] pushFrame: first frame (${bytes.length}B)`);
+  else if (_pushFrameCount % 100 === 0) console.log(`[player] pushFrame #${_pushFrameCount} (${bytes.length}B)`);
   const pcm = _codec.decode(bytes);
-  if (pcm) scheduleF32(pcm, _codec.sampleRate);
+  if (pcm) {
+    scheduleF32(pcm, _codec.sampleRate);
+    whisper.pushLivePcm(pcm, _codec.sampleRate);
+  }
 }
 
 export function stop(): void {
@@ -197,6 +314,7 @@ export function stop(): void {
   store.audio.currentTime.value   = 0;
   store.audio.duration.value      = null;
   _playStartCtxTime               = 0;
+  _lastPcm                        = null;
 }
 
 // ── File playback ─────────────────────────────────────────────────────────────
@@ -207,16 +325,23 @@ function playPcmChunks(chunks: Float32Array[], sampleRate: number): number {
   const merged = new Float32Array(totalLen);
   let pos = 0;
   for (const c of chunks) { merged.set(c, pos); pos += c.length; }
+  _lastPcm = { data: merged, sampleRate };
 
   const ctx = ensureAudioCtx();
   const buf = ctx.createBuffer(1, merged.length, sampleRate);
   buf.copyToChannel(merged as unknown as Float32Array<ArrayBuffer>, 0);
+  _lastBuffer = buf;
+  return _startBuffer(buf);
+}
+
+function _startBuffer(buf: AudioBuffer, offsetSec = 0): number {
+  const ctx = ensureAudioCtx();
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.connect(_analyser ?? ctx.destination);
   src.onended = () => { _sources = _sources.filter(s => s !== src); };
   _sources.push(src);
-  src.start(ctx.currentTime + LOOKAHEAD);
+  src.start(ctx.currentTime + LOOKAHEAD, offsetSec);
   return buf.duration;
 }
 
@@ -261,12 +386,8 @@ export async function playFileDownload(fd: FileDownload): Promise<void> {
   } else if (type === 'passthrough') {
     const arrayBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const decoded = await ctx.decodeAudioData(arrayBuf as ArrayBuffer);
-    const src = ctx.createBufferSource();
-    src.buffer = decoded;
-    src.connect(_analyser ?? ctx.destination);
-    src.onended = () => { _sources = _sources.filter(s => s !== src); };
-    _sources.push(src);
-    src.start(ctx.currentTime + LOOKAHEAD);
+    _lastBuffer = decoded;
+    _startBuffer(decoded);
     playDuration = decoded.duration;
   } else {
     const fb = frameBytes ?? 160;
@@ -287,8 +408,35 @@ export async function playFileDownload(fd: FileDownload): Promise<void> {
     _endTimer = null;
     store.audio.playbackState.value = 'idle';
   }, playDuration * 1000 + 300);
+
+  // Auto-transcribe file when whisper is enabled
+  if (whisper.enabled.value && _lastPcm) {
+    void whisper.transcribeFile(_lastPcm.data, _lastPcm.sampleRate);
+  }
 }
 
 export async function replay(): Promise<void> {
   if (_lastPlayed) await playFileDownload(_lastPlayed);
+}
+
+export function seekTo(seconds: number): void {
+  if (!_lastBuffer) return;
+  const offset = Math.max(0, Math.min(seconds, _lastBuffer.duration - 0.05));
+  const remaining = _lastBuffer.duration - offset;
+
+  // Stop current sources without clearing _lastBuffer
+  if (_endTimer !== null) { clearTimeout(_endTimer); _endTimer = null; }
+  for (const src of _sources) { try { src.stop(); } catch { /* already ended */ } }
+  _sources = [];
+
+  const ctx = ensureAudioCtx();
+  _startBuffer(_lastBuffer, offset);
+  _playStartCtxTime = ctx.currentTime + LOOKAHEAD - offset;
+  store.audio.currentTime.value   = offset;
+  store.audio.playbackState.value = 'playing';
+
+  _endTimer = setTimeout(() => {
+    _endTimer = null;
+    store.audio.playbackState.value = 'idle';
+  }, remaining * 1000 + 300);
 }

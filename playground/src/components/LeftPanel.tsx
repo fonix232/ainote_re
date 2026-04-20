@@ -16,12 +16,14 @@ export function LeftPanel({ onConnectKnown, onForgetKnown }: LeftPanelProps) {
   const tiles  = proto?.stateTiles?.value ?? {};
   const collapsed = useSignal(false);
 
-  const TILE_ORDER = ['Name', 'Battery', 'Charging', 'Storage', 'Version', 'Files',
-                      'Recording', 'Last Rec', 'Time'];
+  const TILE_ORDER = ['Name', 'Firmware', 'Battery', 'Charging', 'Storage',
+                      'Recording', 'RecMode', 'Last Rec', 'Rec Info',
+                      'Serial', 'Bind', 'Time', 'Sync',
+                      'LED', 'VOX', 'Motor', 'USB', 'Noise', 'Screen', 'Platform', 'Version'];
   const tileEntries: [string, string][] = [
     ...TILE_ORDER.filter(k => k in tiles).map(k => [k, tiles[k]!] as [string, string]),
     ...Object.entries(tiles).filter(([k]) => !TILE_ORDER.includes(k)),
-  ];
+  ].filter(([, v]) => v !== 'Set');
   const cmds = proto?.commands ?? [];
 
   const CMD_SECTIONS: { cat: CommandCategory; label: string; danger?: true }[] = [
@@ -79,7 +81,7 @@ export function LeftPanel({ onConnectKnown, onForgetKnown }: LeftPanelProps) {
         {isConn && cmds.length > 0 && CMD_SECTIONS.map(({ cat, label, danger }) => {
           const section = cmds.filter(c => (c.category ?? 'debug') === cat);
           if (section.length === 0) return null;
-          return <CommandSection key={cat} label={label} cmds={section} danger={danger} />;
+          return <CommandSection key={cat} label={label} cmds={section} danger={!!danger} />;
         })}
 
       </div>}
@@ -131,7 +133,7 @@ function CommandSection({ label, cmds, danger }: { label: string; cmds: AnyDebug
       >{label} {open.value ? '⌄' : '›'}</button>
       {open.value && (
         <div class="flex flex-col gap-1.5 mt-2">
-          {cmds.map(cmd => <CmdCard key={cmd.label} cmd={cmd} danger={danger} />)}
+          {cmds.map(cmd => <CmdCard key={cmd.label} cmd={cmd} danger={!!danger} />)}
         </div>
       )}
     </div>
@@ -141,7 +143,7 @@ function CommandSection({ label, cmds, danger }: { label: string; cmds: AnyDebug
 function CmdCard({ cmd, danger }: { cmd: AnyDebugCommand; danger?: boolean }) {
   if ('kind' in cmd && cmd.kind === 'toggle') return <CmdToggle cmd={cmd} />;
   if ('kind' in cmd && cmd.kind === 'select') return <CmdSelect cmd={cmd} />;
-  return <CmdButton cmd={cmd} danger={danger} />;
+  return <CmdButton cmd={cmd} danger={!!danger} />;
 }
 
 function CmdButton({ cmd, danger }: { cmd: import('@ainote/protocols').DebugCommand; danger?: boolean }) {
