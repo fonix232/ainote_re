@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: night --default, dark, dim, dracula, synthwave, cyberpunk, black, luxury, coffee, light, cupcake, nord, winter, lofi;
+}
+
+/* Monospace log output */
+#log-output {
+  font-family: 'Menlo', 'Monaco', 'Fira Code', 'Cascadia Code', monospace;
+}

@@ -1,0 +1,42 @@
+.archive/
+
+# Playground (Node.js/TypeScript)
+playground/node_modules/
+playground/dist/
+playground/.env
+playground/.env.local
+playground/yarn.lock
+playground/package-lock.json
+playground/.DS_Store
+
+# Libraries - Kotlin
+libraries/kotlin/build/
+libraries/kotlin/.gradle/
+libraries/kotlin/.idea/
+libraries/kotlin/*.iml
+libraries/kotlin/local.properties
+
+# Libraries - Node.js/TypeScript
+libraries/typescript/node_modules/
+libraries/typescript/dist/
+libraries/typescript/build/
+libraries/typescript/.env
+libraries/typescript/.env.local
+libraries/typescript/yarn.lock
+libraries/typescript/package-lock.json
+libraries/typescript/.DS_Store
+
+# Libraries - Python
+libraries/python/__pycache__/
+libraries/python/*.py[cod]
+libraries/python/*$py.class
+libraries/python/*.so
+libraries/python/.env
+libraries/python/.env.local
+libraries/python/venv/
+libraries/python/env/
+libraries/python/.venv
+libraries/python/dist/
+libraries/python/build/
+libraries/python/*.egg-info/
+

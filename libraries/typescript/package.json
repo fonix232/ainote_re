@@ -1,0 +1,29 @@
+{
+  "name": "@ainote/protocols",
+  "version": "0.1.0",
+  "description": "BLE recording-pen protocol library — transport types, feature interfaces, and protocol base class.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@preact/signals-core": "^1.8.0"
+  },
+  "peerDependencies": {
+    "@types/web-bluetooth": "^0.0.21"
+  },
+  "devDependencies": {
+    "@types/web-bluetooth": "^0.0.21",
+    "typescript": "^5.8.3"
+  }
+}
