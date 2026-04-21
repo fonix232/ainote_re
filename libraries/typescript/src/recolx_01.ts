@@ -46,10 +46,6 @@ interface Recolx01Transfer extends ActiveTransfer {
   chunks: Uint8Array[];
 }
 
-function frame(...bytes: number[]): Uint8Array {
-  return new Uint8Array(bytes);
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -124,27 +120,27 @@ export class Recolx01Protocol
   }
 
   async refreshDeviceInfo(): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x01, 0x0E)); // battery
+    await this._write(this._buildCommand(0x0E)); // battery
     await delay(80);
-    await this._write(frame(0x55, 0xAA, 0x01, 0x12)); // fw
+    await this._write(this._buildCommand(0x12)); // fw
     await delay(80);
-    await this._write(frame(0x55, 0xAA, 0x01, 0x0B)); // storage free+total
+    await this._write(this._buildCommand(0x0B)); // storage free+total
     await delay(80);
-    await this._write(frame(0x55, 0xAA, 0x01, 0x17)); // settings dump
+    await this._write(this._buildCommand(0x17)); // settings dump
   }
 
   async refreshBattery(): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x01, 0x0E));
+    await this._write(this._buildCommand(0x0E));
   }
 
   async refreshStorage(): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x01, 0x0B));
+    await this._write(this._buildCommand(0x0B));
   }
 
   async refreshFiles(): Promise<void> {
     this._fileListBuf = [];
     this._collectingList = true;
-    await this._write(frame(0x55, 0xAA, 0x01, 0x05));
+    await this._write(this._buildCommand(0x05));
   }
 
   downloadFile(fileId: string): Promise<FileDownload> {
@@ -185,28 +181,28 @@ export class Recolx01Protocol
   }
 
   async startRecord(): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x01, 0x03));
-    await this._write(frame(0x55, 0xAA, 0x01, 0x21));
+    await this._write(this._buildCommand(0x03));
+    await this._write(this._buildCommand(0x21));
   }
 
   async stopRecord(): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x01, 0x04));
+    await this._write(this._buildCommand(0x04));
   }
 
   async setLed(on: boolean): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x02, 0x13, on ? 0x01 : 0x02));
+    await this._write(this._buildCommand(0x13, new Uint8Array([on ? 0x01 : 0x02])));
   }
 
   async setMotor(on: boolean): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x02, 0x18, on ? 0x01 : 0x02));
+    await this._write(this._buildCommand(0x18, new Uint8Array([on ? 0x01 : 0x02])));
   }
 
   async setWav(on: boolean): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x02, 0x16, on ? 0x01 : 0x02));
+    await this._write(this._buildCommand(0x16, new Uint8Array([on ? 0x01 : 0x02])));
   }
 
   async setUsb(on: boolean): Promise<void> {
-    await this._write(frame(0x55, 0xAA, 0x02, 0x14, on ? 0x01 : 0x02));
+    await this._write(this._buildCommand(0x14, new Uint8Array([on ? 0x01 : 0x02])));
   }
 
   override get commands(): AnyDebugCommand[] {
@@ -238,7 +234,7 @@ export class Recolx01Protocol
         get: () => this._settings.value.usb,
         set: (on) => this.setUsb(on),
       },
-      { category: 'dangerous', label: 'Format Device', confirm: true, fn: () => this._write(frame(0x55, 0xAA, 0x01, 0x1E)) },
+      { category: 'dangerous', label: 'Format Device', confirm: true, fn: () => this._write(this._buildCommand(0x1E)) },
     ];
   }
 
@@ -278,7 +274,7 @@ export class Recolx01Protocol
         patch('Recording', 'Stopped');
         this._streamActive = false;
         this._cb.stopStreaming();
-        void this._write(frame(0x55, 0xAA, 0x01, 0x22));
+        void this._write(this._buildCommand(0x22));
         void this.refreshFiles();
         break;
 
@@ -483,30 +479,41 @@ export class Recolx01Protocol
     await this._t.writeChar(SVC, C_WRITE, pkt);
   }
 
+  protected override _buildCommand(cmd: number, payload?: Uint8Array): Uint8Array {
+    const payloadLen = payload?.length ?? 0;
+    const out = new Uint8Array(4 + payloadLen);
+    out[0] = 0x55;
+    out[1] = 0xAA;
+    out[2] = (1 + payloadLen) & 0xFF;
+    out[3] = cmd & 0xFF;
+    if (payload && payloadLen > 0) out.set(payload, 4);
+    return out;
+  }
+
   private _timeSyncFrame(): Uint8Array {
     const n = new Date();
     const pad = (v: number) => String(v).padStart(2, '0');
     const ts = `${n.getFullYear()}${pad(n.getMonth() + 1)}${pad(n.getDate())}${pad(n.getHours())}${pad(n.getMinutes())}${pad(n.getSeconds())}`;
     const b = new TextEncoder().encode(ts);
-    const pkt = new Uint8Array(4 + b.length);
-    pkt[0] = 0x55; pkt[1] = 0xAA; pkt[2] = 0x0F; pkt[3] = 0x02;
-    pkt.set(b, 4);
-    return pkt;
+    return this._buildCommand(0x02, b);
   }
 
   private _syncFileFrame(filename: string): Uint8Array {
     const name = new TextEncoder().encode(filename);
-    const pkt = new Uint8Array(8 + name.length);
-    pkt.set([0x55, 0xAA, 0x13, 0x07, 0x00, 0x00, 0x00, 0x00], 0);
-    pkt.set(name, 8);
-    return pkt;
+    const payload = new Uint8Array(4 + name.length);
+    payload.set([0x00, 0x00, 0x00, 0x00], 0);
+    payload.set(name, 4);
+    return this._buildCommand(0x07, payload);
   }
 
   private _deleteFileFrame(filename: string): Uint8Array {
     const name = new TextEncoder().encode(filename);
-    const pkt = new Uint8Array(8 + name.length);
-    pkt.set([0x55, 0xAA, 0x0F, 0x0A, 0x00, 0x00, 0x00, 0x00], 0);
-    pkt.set(name, 8);
+    const payload = new Uint8Array(4 + name.length);
+    payload.set([0x00, 0x00, 0x00, 0x00], 0);
+    payload.set(name, 4);
+    const pkt = this._buildCommand(0x0A, payload);
+    // Preserve existing protocol behavior for delete requests.
+    pkt[2] = 0x0F;
     return pkt;
   }
 
