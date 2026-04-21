@@ -52,16 +52,6 @@ function crc16arc(data: Uint8Array): number {
   return crc & 0xFFFF;
 }
 
-// ── Frame builder ─────────────────────────────────────────────────────────────
-// TX: [A0 0A 01 cmd len payload... crc_lo crc_hi]
-
-function frame(cmd: number, payload: number[] = []): Uint8Array {
-  const header = [0xA0, 0x0A, 0x01, cmd, payload.length & 0xFF];
-  const body   = new Uint8Array([...header, ...payload]);
-  const crc    = crc16arc(body);
-  return new Uint8Array([...body, crc & 0xFF, (crc >> 8) & 0xFF]);
-}
-
 // ── Transfer state ─────────────────────────────────────────────────────────────
 
 interface Xlx3085Transfer extends ActiveTransfer {
@@ -191,20 +181,20 @@ export class Xlx3085Protocol
     const bindPayload = await new Promise<Uint8Array>(resolve => {
       this._bindResolve = resolve;
       setTimeout(() => { this._bindResolve = null; resolve(new Uint8Array(1)); }, 4_000);
-      void this._write(frame(0x02));
+      void this._write(this._buildCommand(0x02));
     });
     this._bindResolve = null;
 
     // Step 2: bindDevice (0x03) — echo token if bound, else 17 zero bytes.
     const bindToken = new Uint8Array(17);
     if (bindPayload.length > 1) bindToken.set(bindPayload.slice(0, 17));
-    void this._write(frame(0x03, Array.from(bindToken)));
+    void this._write(this._buildCommand(0x03, bindToken));
 
     // Step 3: getSerial (0x01) — stable alphanumeric ID (e.g. "IA3HA05586").
     const serial = await new Promise<string>(resolve => {
       this._serialResolve = resolve;
       setTimeout(() => { this._serialResolve = null; resolve(transport.deviceName); }, 2_000);
-      void this._write(frame(0x01));
+      void this._write(this._buildCommand(0x01));
     });
     this._serialResolve = null;
     this._settingsKey = serial;
@@ -231,30 +221,30 @@ export class Xlx3085Protocol
 
   async syncTime(): Promise<void> {
     const n = new Date();
-    await this._write(frame(0x04, [
+    await this._write(this._buildCommand(0x04, new Uint8Array([
       n.getFullYear() - 2000, n.getMonth() + 1, n.getDate(),
       n.getHours(), n.getMinutes(), n.getSeconds(),
-    ]));
+    ])));
   }
 
   // ── DeviceInfoFeature ────────────────────────────────────────────────────────
 
   async refreshDeviceInfo(): Promise<void> {
-    await this._write(frame(0x05));
-    await this._write(frame(0x18, [0x00])); // platformSet = Android
+    await this._write(this._buildCommand(0x05));
+    await this._write(this._buildCommand(0x18, new Uint8Array([0x00]))); // platformSet = Android
   }
 
   // ── BatteryFeature / StorageFeature ──────────────────────────────────────────
   // No dedicated opcodes — data arrives in the 0x05 response and 0x0F status push.
 
-  async refreshBattery(): Promise<void> { await this._write(frame(0x05)); }
-  async refreshStorage(): Promise<void> { await this._write(frame(0x05)); }
+  async refreshBattery(): Promise<void> { await this._write(this._buildCommand(0x05)); }
+  async refreshStorage(): Promise<void> { await this._write(this._buildCommand(0x05)); }
 
   // ── FilesFeature ─────────────────────────────────────────────────────────────
 
   async refreshFiles(): Promise<void> {
     this._fileListBuf = []; this._collectingList = true;
-    await this._write(frame(0x0A));
+    await this._write(this._buildCommand(0x0A));
   }
 
   downloadFile(fileId: string): Promise<FileDownload> {
@@ -272,77 +262,77 @@ export class Xlx3085Protocol
   }
 
   async deleteFile(fileId: string): Promise<void> {
-    await this._write(frame(0x0D, Array.from(new TextEncoder().encode(fileId))));
+    await this._write(this._buildCommand(0x0D, new TextEncoder().encode(fileId)));
     this._files.value = this._files.value.filter(f => f.id !== fileId);
   }
 
   // ── RecordFeature ────────────────────────────────────────────────────────────
 
-  async startRecord():  Promise<void> { await this._write(frame(0x06)); }
-  async stopRecord():   Promise<void> { await this._write(frame(0x07)); }
-  async pauseRecord():  Promise<void> { await this._write(frame(0x08)); }
-  async resumeRecord(): Promise<void> { await this._write(frame(0x09)); }
+  async startRecord():  Promise<void> { await this._write(this._buildCommand(0x06)); }
+  async stopRecord():   Promise<void> { await this._write(this._buildCommand(0x07)); }
+  async pauseRecord():  Promise<void> { await this._write(this._buildCommand(0x08)); }
+  async resumeRecord(): Promise<void> { await this._write(this._buildCommand(0x09)); }
 
   // ── Commands ──────────────────────────────────────────────────────────────────
 
   override get commands(): AnyDebugCommand[] {
     return [
       // info
-      { category: 'info',      label: 'Device Info',        fn: () => this._write(frame(0x05)) },
-      { category: 'info',      label: 'Rec Info',           fn: () => this._write(frame(0x15)) },
+      { category: 'info',      label: 'Device Info',        fn: () => this._write(this._buildCommand(0x05)) },
+      { category: 'info',      label: 'Rec Info',           fn: () => this._write(this._buildCommand(0x15)) },
       { category: 'info',      label: 'File List',          fn: () => this.refreshFiles() },
       { category: 'info',      label: 'Sync Time',          fn: () => this.syncTime() },
       // recording
       { category: 'recording', label: 'Start Record',       fn: () => this.startRecord() },
       { category: 'recording', label: 'Stop Record',        fn: () => this.stopRecord() },
-      { category: 'recording', label: 'Pause Record',       fn: () => this._write(frame(0x08)) },
-      { category: 'recording', label: 'Resume Record',      fn: () => this._write(frame(0x09)) },
+      { category: 'recording', label: 'Pause Record',       fn: () => this._write(this._buildCommand(0x08)) },
+      { category: 'recording', label: 'Resume Record',      fn: () => this._write(this._buildCommand(0x09)) },
       // settings
       {
         category: 'settings', label: 'LED', kind: 'toggle' as const,
         get: () => this._settingLed.value,
-        set: async (on: boolean) => { await this._write(frame(0x11, [on ? 1 : 0])); this._settingLed.value = on; this._saveSettings(this._settingsKey); },
+        set: async (on: boolean) => { await this._write(this._buildCommand(0x11, new Uint8Array([on ? 1 : 0]))); this._settingLed.value = on; this._saveSettings(this._settingsKey); },
       },
       {
         category: 'settings', label: 'Motor / Vibration', kind: 'toggle' as const,
         get: () => this._settingMotor.value,
-        set: async (on: boolean) => { await this._write(frame(0x2A, [on ? 1 : 0])); this._settingMotor.value = on; this._saveSettings(this._settingsKey); },
+        set: async (on: boolean) => { await this._write(this._buildCommand(0x2A, new Uint8Array([on ? 1 : 0]))); this._settingMotor.value = on; this._saveSettings(this._settingsKey); },
       },
       {
         category: 'settings', label: 'VOX', kind: 'toggle' as const,
         get: () => this._settingVox.value,
-        set: async (on: boolean) => { await this._write(frame(0x14, [on ? 1 : 0])); this._settingVox.value = on; this._saveSettings(this._settingsKey); },
+        set: async (on: boolean) => { await this._write(this._buildCommand(0x14, new Uint8Array([on ? 1 : 0]))); this._settingVox.value = on; this._saveSettings(this._settingsKey); },
       },
       {
         category: 'settings', label: 'Screen always-on', kind: 'toggle' as const,
         get: () => this._settingScreen.value,
-        set: async (on: boolean) => { await this._write(frame(0x1A, [on ? 1 : 0])); this._settingScreen.value = on; this._saveSettings(this._settingsKey); },
+        set: async (on: boolean) => { await this._write(this._buildCommand(0x1A, new Uint8Array([on ? 1 : 0]))); this._settingScreen.value = on; this._saveSettings(this._settingsKey); },
       },
       {
         category: 'settings', label: 'USB mode', kind: 'select' as const,
         get: () => this._settingUsb.value,
-        set: async (v: number | string) => { await this._write(frame(0x13, [Number(v)])); this._settingUsb.value = Number(v); this._saveSettings(this._settingsKey); },
+        set: async (v: number | string) => { await this._write(this._buildCommand(0x13, new Uint8Array([Number(v)]))); this._settingUsb.value = Number(v); this._saveSettings(this._settingsKey); },
         options: { 0: 'Charge only', 1: 'Disk / OTG' },
       },
       {
         category: 'settings', label: 'Noise reduction', kind: 'select' as const,
         get: () => this._settingNoise.value,
-        set: async (v: number | string) => { await this._write(frame(0x17, [Number(v)])); this._settingNoise.value = Number(v); this._saveSettings(this._settingsKey); },
+        set: async (v: number | string) => { await this._write(this._buildCommand(0x17, new Uint8Array([Number(v)]))); this._settingNoise.value = Number(v); this._saveSettings(this._settingsKey); },
         options: { 0: 'Off', 5: 'Low', 9: 'Medium', 15: 'High' },
       },
       {
         category: 'settings', label: 'Max rec duration', kind: 'select' as const,
         get: () => this._settingSegRec.value,
-        set: async (v: number | string) => { await this._write(frame(0x16, [Number(v)])); this._settingSegRec.value = Number(v); this._saveSettings(this._settingsKey); },
+        set: async (v: number | string) => { await this._write(this._buildCommand(0x16, new Uint8Array([Number(v)]))); this._settingSegRec.value = Number(v); this._saveSettings(this._settingsKey); },
         options: { 0: '30 min', 1: '1 hr', 2: '2 hr', 3: '3 hr' },
       },
       // debug
-      { category: 'debug', label: 'Get Bind Info',      fn: () => this._write(frame(0x02)) },
-      { category: 'debug', label: 'Get Serial',         fn: () => this._write(frame(0x01)) },
-      { category: 'debug', label: 'Platform (Android)', fn: () => this._write(frame(0x18, [0x00])) },
+      { category: 'debug', label: 'Get Bind Info',      fn: () => this._write(this._buildCommand(0x02)) },
+      { category: 'debug', label: 'Get Serial',         fn: () => this._write(this._buildCommand(0x01)) },
+      { category: 'debug', label: 'Platform (Android)', fn: () => this._write(this._buildCommand(0x18, new Uint8Array([0x00]))) },
       // dangerous
-      { category: 'dangerous', label: 'Restore Factory', confirm: true, fn: () => this._write(frame(0x12)) },
-      { category: 'dangerous', label: 'Format Device',   confirm: true, fn: () => this._write(frame(0x10)) },
+      { category: 'dangerous', label: 'Restore Factory', confirm: true, fn: () => this._write(this._buildCommand(0x12)) },
+      { category: 'dangerous', label: 'Format Device',   confirm: true, fn: () => this._write(this._buildCommand(0x10)) },
     ];
   }
 
@@ -627,12 +617,29 @@ export class Xlx3085Protocol
     await this._t.writeChar(SVC, C_WRITE, pkt);
   }
 
+  /**
+   * Build XLX 3085 command frame with CRC-16/ARC.
+   * Format: [A0 0A 01 cmd len payload... crc_lo crc_hi]
+   */
+  protected override _buildCommand(cmd: number, payload?: Uint8Array): Uint8Array {
+    const len = payload?.length ?? 0;
+    const body = new Uint8Array(5 + len);
+    body.set([0xA0, 0x0A, 0x01, cmd, len & 0xFF], 0);
+    if (payload && payload.length > 0) body.set(payload, 5);
+    const crc = crc16arc(body);
+    const frameWithCrc = new Uint8Array(body.length + 2);
+    frameWithCrc.set(body, 0);
+    frameWithCrc[body.length] = crc & 0xFF;
+    frameWithCrc[body.length + 1] = (crc >> 8) & 0xFF;
+    return frameWithCrc;
+  }
+
   private _syncFileFrame(filename: string, offset: number): Uint8Array {
     const nameBytes = new TextEncoder().encode(filename);
     const payload   = new Uint8Array(nameBytes.length + 4);
     payload.set(nameBytes, 0);
     new DataView(payload.buffer).setInt32(nameBytes.length, offset, false);
-    return frame(0x0B, Array.from(payload));
+    return this._buildCommand(0x0B, payload);
   }
 
   private _parseFileEntry(payload: Uint8Array): FileInfo | null {
