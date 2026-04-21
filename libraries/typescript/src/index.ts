@@ -7,3 +7,4 @@
  * individual protocols from their own subpath.
  */
 export * from './types.js';
+export { Xlx3085Protocol, xlx3085 } from './xlx_3085.js';
