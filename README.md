@@ -10,6 +10,20 @@ The only truly secure AI pipeline is one you have absolute control over, from th
 
 The goal of this repository is to analyse a variety of these devices, reverse engineer their protocols, and pull them into an open ecosystem - much like the awesome people over at omi.me have done.
 
+## Hardware
+
+While the number of device variations is pretty big, these devices are actually fairly standardised, with only a handful of options for MCUs and protocols.
+
+## Devices
+
+The following devices have been so far targeted for RE:
+
+### Recolx AI
+
+- Manufacturer:
+- Model:
+- FCCID: 
+
 ## Protocols
 
 In my investigation, I've identified a handful of protocols. Some manufacturers simply rely on the MCU/ODM manufacturer's own protocols, while others develop their own.
