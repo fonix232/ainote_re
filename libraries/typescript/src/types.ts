@@ -299,6 +299,20 @@ export abstract class Protocol {
     this._cb.log('!!', new Uint8Array(0), msg);
   }
 
+  /**
+   * Build a command frame. Default implementation just combines cmd + payload.
+   * Subclasses override to add framing, CRC, etc.
+   */
+  protected _buildCommand(cmd: number, payload?: Uint8Array): Uint8Array {
+    if (!payload || payload.length === 0) {
+      return new Uint8Array([cmd]);
+    }
+    const result = new Uint8Array(1 + payload.length);
+    result[0] = cmd;
+    result.set(payload, 1);
+    return result;
+  }
+
   // ── Feature predicates ─────────────────────────────────────────────────────
 
   hasFiles():          this is FilesFeature          { return 'files'             in this; }
