@@ -7,3 +7,4 @@
  * individual protocols from their own subpath.
  */
 export * from './types.js';
+export { MobvoiLinkProtocol, mobvoiLink } from './mobvoi_link.js';
