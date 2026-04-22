@@ -1,7 +1,7 @@
 import { computed } from '@preact/signals';
-import type { Protocol } from '@ainote/protocols';
+import { ProtocolRegistry } from '@ainote/protocols';
 import { store } from '../store/index.js';
 
-export const PROTOCOLS: Record<string, Protocol> = {};
+export const PROTOCOLS = new ProtocolRegistry();
 
-export const activeProto = computed(() => PROTOCOLS[store.connection.activeProtoId.value]);
+export const activeProto = computed(() => PROTOCOLS.get(store.connection.activeProtoId.value));

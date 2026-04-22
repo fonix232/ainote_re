@@ -1,5 +1,6 @@
 import { useSignal } from '@preact/signals';
-import type { KnownDevice as KnownDeviceEntry, AnyDebugCommand, CommandCategory } from '@ainote/protocols';
+import type { AnyDebugCommand, CommandCategory } from '@ainote/protocols';
+import type { KnownDevice as KnownDeviceEntry } from '../store/persistence.js';
 import { store } from '../store/index.js';
 import { PROTOCOLS } from '../protocols/registry.js';
 import { activeProto } from '../protocols/registry.js';
@@ -13,7 +14,7 @@ export function LeftPanel({ onConnectKnown, onForgetKnown }: LeftPanelProps) {
   const s      = store.connection.state.value;
   const isConn = s === 'connected';
   const proto  = activeProto.value;
-  const tiles  = proto?.stateTiles?.value ?? {};
+  const tiles  = store.device.stateTiles.value;
   const collapsed = useSignal(false);
 
   const TILE_ORDER = ['Name', 'Firmware', 'Battery', 'Charging', 'Storage',
@@ -24,7 +25,7 @@ export function LeftPanel({ onConnectKnown, onForgetKnown }: LeftPanelProps) {
     ...TILE_ORDER.filter(k => k in tiles).map(k => [k, tiles[k]!] as [string, string]),
     ...Object.entries(tiles).filter(([k]) => !TILE_ORDER.includes(k)),
   ].filter(([, v]) => v !== 'Set');
-  const cmds = proto?.commands ?? [];
+  const cmds = store.device.commands.value;
 
   const CMD_SECTIONS: { cat: CommandCategory; label: string; danger?: true }[] = [
     { cat: 'info',      label: 'Info'      },
@@ -63,7 +64,7 @@ export function LeftPanel({ onConnectKnown, onForgetKnown }: LeftPanelProps) {
         {isConn && (
           <div>
             <div class="font-semibold text-sm leading-tight">{store.connection.label.value || '—'}</div>
-            <div class="text-xs text-base-content/40 mt-0.5">{proto?.label ?? '—'}</div>
+            <div class="text-xs text-base-content/40 mt-0.5">{store.device.protocolLabel.value || '—'}</div>
           </div>
         )}
 
@@ -226,7 +227,7 @@ interface KnownDeviceRowProps {
 }
 
 function KnownDeviceRow({ entry, disabled, onConnect, onForget }: KnownDeviceRowProps) {
-  const proto = PROTOCOLS[entry.protocolId];
+  const proto = PROTOCOLS.get(entry.protocolId);
   return (
     <div class="flex items-center gap-2 px-2 py-1.5">
       <div class="flex-1 min-w-0">

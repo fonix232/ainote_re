@@ -1,6 +1,11 @@
 import { signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
-import type { KnownDevice } from '@ainote/protocols';
+
+export interface KnownDevice {
+  id: string;
+  name: string;
+  protocolId: string;
+}
 
 // ── File cache ────────────────────────────────────────────────────────────────
 

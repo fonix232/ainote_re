@@ -3,8 +3,7 @@ import { LeftPanel }    from './LeftPanel.js';
 import { LogPanel }   from './LogPanel.js';
 import { RightPanel } from './RightPanel.js';
 import { store } from '../store/index.js';
-import { PROTOCOLS } from '../protocols/registry.js';
-import type { KnownDevice } from '@ainote/protocols';
+import type { KnownDevice } from '../store/persistence.js';
 import type { BleManager } from '../ble/BleManager.js';
 
 interface AppProps {
@@ -29,5 +28,3 @@ export function App({ bleManager }: AppProps) {
     </div>
   );
 }
-
-void PROTOCOLS;

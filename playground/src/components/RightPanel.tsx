@@ -5,10 +5,10 @@ import { store } from '../store/index.js';
 import { activeProto } from '../protocols/registry.js';
 import { FileList } from './FileList.js';
 import type { FileEntry } from './FileList.js';
-import type { FileDownload } from '@ainote/protocols';
 import {
   stop, replay, scheduleF32,
   playFileDownload,
+  type PlaybackFile,
   pausePlayback, resumePlayback,
   ensureAudioCtx,
   seekTo,
@@ -22,34 +22,37 @@ export function RightPanel() {
   const proto  = activeProto.value;
   const collapsed = useSignal(false);
 
-  const [cachedFiles, setCachedFiles]   = useState<Record<string, FileDownload>>({});
+  const [cachedFiles, setCachedFiles]   = useState<Record<string, PlaybackFile>>({});
   const [ffmpegStatus, setFfmpegStatus] = useState<Record<string, string>>({});
 
-  const fileList = proto?.hasFiles() ? proto.files.value : [];
+  const fileList = store.device.files.value;
   useEffect(() => {
-    if (!isConn || !proto?.hasFiles()) { setCachedFiles({}); return; }
-    const loaded: Record<string, FileDownload> = {};
-    for (const f of proto.files.value) {
+    if (!isConn || !store.device.supportsFiles.value) { setCachedFiles({}); return; }
+    const fmt = store.device.audioFormat.value;
+    if (!fmt) return;
+    const loaded: Record<string, PlaybackFile> = {};
+    for (const f of fileList) {
       const bytes = store.persistence.cache.load(cacheKey(f.id));
-      if (bytes) loaded[f.id] = { data: bytes, raw: bytes, format: proto.audioFormat };
+      if (bytes) loaded[f.id] = { data: bytes, raw: bytes, format: fmt };
     }
     setCachedFiles(loaded);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConn, fileList.length]);
+  }, [isConn, fileList.length, store.device.supportsFiles.value, store.device.audioFormat.value]);
 
   function cacheKey(id: string): string {
     return `${store.connection.activeProtoId.value}:${store.connection.label.value}:${id}:v2`;
   }
 
   async function onDownload(id: string): Promise<void> {
-    const dl = proto?.hasFiles() ? proto.downloadProgress.value : null;
+    const dl = store.device.downloadProgress.value;
     if (dl) return;
     const cached = cachedFiles[id];
     if (cached) { offerFileDownload(id, cached.data, cached.format.extension); return; }
     if (!proto?.hasFiles()) return;
     try {
       const result = await proto.downloadFile(id);
-      setCachedFiles(prev => ({ ...prev, [id]: result }));
+      const playbackFile: PlaybackFile = { ...result, format: store.device.audioFormat.value ?? proto.audioFormat };
+      setCachedFiles(prev => ({ ...prev, [id]: playbackFile }));
       store.persistence.cache.save(cacheKey(id), result.data);
     } catch (err) {
       store.log.error((err as Error).message);
@@ -112,12 +115,12 @@ export function RightPanel() {
     URL.revokeObjectURL(url);
   }
 
-  const supportsDeviceDelete = isConn && !!proto?.hasFiles();
-  const showFfmpegBtn        = proto?.audioFormat.codec.type === 'sbc';
-  const dl = proto?.hasFiles() ? proto.downloadProgress.value : null;
+  const supportsDeviceDelete = isConn && store.device.supportsFiles.value;
+  const showFfmpegBtn        = store.device.audioFormat.value?.codec.type === 'sbc';
+  const dl = store.device.downloadProgress.value;
 
-  const fileEntries: FileEntry[] = proto?.hasFiles()
-    ? proto.files.value.map(f => {
+  const fileEntries: FileEntry[] = store.device.supportsFiles.value && proto?.hasFiles()
+    ? fileList.map(f => {
         const cached = cachedFiles[f.id];
         return {
           id:               f.id,
@@ -159,7 +162,7 @@ export function RightPanel() {
 
       {!collapsed.value && whisper.enabled.value && <TranscriptPanel />}
 
-      {!collapsed.value && isConn && proto?.hasFiles() && (
+      {!collapsed.value && isConn && store.device.supportsFiles.value && (
         <div class="flex-1 flex flex-col p-3 gap-2">
           <div class="flex items-center gap-2">
             <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50 flex-1">
@@ -168,7 +171,7 @@ export function RightPanel() {
             <button
               class="btn btn-xs btn-ghost"
               title="Refresh file list"
-              onClick={() => void proto.refreshFiles().catch(e => store.log.error((e as Error).message))}
+              onClick={() => { const p = proto; if (p?.hasFiles()) void p.refreshFiles().catch((e: unknown) => store.log.error((e as Error).message)); }}
             >
               <RefreshCw size={13} />
             </button>
@@ -205,7 +208,7 @@ function AudioSection() {
 
   // When live-streaming, player buttons control the device recording instead
   // of local playback.
-  const rec = isLive && proto?.hasRecord() ? proto : null;
+  const rec = isLive && store.device.supportsRecording.value && proto?.hasRecord() ? proto : null;
 
   function onClose() {
     stop();
@@ -214,14 +217,14 @@ function AudioSection() {
   }
 
   function onStop() {
-    if (rec) void rec.stopRecord().catch(e => store.log.error((e as Error).message));
+    if (rec) void rec.stopRecord().catch((e: unknown) => store.log.error((e as Error).message));
     else stop();
   }
 
   function onPlayPause() {
     if (rec) {
-      if (isPaused) void rec.resumeRecord?.().catch(e => store.log.error((e as Error).message));
-      else          void rec.pauseRecord?.().catch(e => store.log.error((e as Error).message));
+      if (isPaused) void rec.resumeRecord?.().catch((e: unknown) => store.log.error((e as Error).message));
+      else          void rec.pauseRecord?.().catch((e: unknown) => store.log.error((e as Error).message));
     } else {
       if (isIdle)        void replay();
       else if (isPaused) void resumePlayback();
@@ -293,7 +296,7 @@ function AudioSection() {
           class="btn btn-sm btn-primary flex-1"
           onClick={onPlayPause}
           title={playTitle}
-          disabled={rec ? !rec.pauseRecord : (isIdle && !isPaused)}
+          disabled={rec ? !rec.pauseRecord : (isIdle && !isPaused)} // rec is Feature.Recording when set
         ><PlayIcon size={15} /></button>
         <button
           class="btn btn-sm btn-ghost"

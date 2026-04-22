@@ -1,5 +1,7 @@
 import { signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
+import { LogType } from '@ainote/protocols';
+import type { LogEntry as ProtocolLogEntry } from '@ainote/protocols';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,6 +18,7 @@ export type LogEvent =
   | { kind: 'disconnected'; name: string }
   | { kind: 'discovery';   deviceName: string; services: DiscoveredServiceInfo[] }
   | { kind: 'info';        msg: string }
+  | { kind: 'warn';        msg: string }
   | { kind: 'error';       msg: string };
 
 export interface LogEntry {
@@ -29,14 +32,53 @@ export interface LogEntry {
 export class LogStore {
   readonly entries: Signal<LogEntry[]> = signal([]);
   #id = 0;
+  #protocolEntryIds = new Map<string, number>();
+
+  #timestamp(): string {
+    const d = new Date();
+    return [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map(n => String(n).padStart(2, '0')).join(':');
+  }
 
   #push(event: LogEvent): number {
-    const d  = new Date();
-    const ts = [d.getHours(), d.getMinutes(), d.getSeconds()]
-      .map(n => String(n).padStart(2, '0')).join(':');
+    const ts = this.#timestamp();
     const id = ++this.#id;
     this.entries.value = [...this.entries.value, { id, ts, event }];
     return id;
+  }
+
+  protocol(entry: ProtocolLogEntry): number {
+    const existingId = this.#protocolEntryIds.get(entry.id);
+    const nextEvent = this.#fromProtocol(entry);
+    if (existingId == null) {
+      const id = this.#push(nextEvent);
+      this.#protocolEntryIds.set(entry.id, id);
+      return id;
+    }
+
+    const ts = this.#timestamp();
+    this.entries.value = this.entries.value.map(logEntry =>
+      logEntry.id === existingId
+        ? { ...logEntry, ts, event: nextEvent }
+        : logEntry,
+    );
+    return existingId;
+  }
+
+  #fromProtocol(entry: ProtocolLogEntry): LogEvent {
+    switch (entry.type) {
+      case LogType.Tx:
+        return { kind: 'frame', dir: 'TX', bytes: entry.bytes, label: entry.label };
+      case LogType.Rx:
+        return { kind: 'frame', dir: 'RX', bytes: entry.bytes, label: entry.label };
+      case LogType.Warn:
+        return { kind: 'warn', msg: entry.label };
+      case LogType.Error:
+        return { kind: 'error', msg: entry.label };
+      case LogType.Info:
+      default:
+        return { kind: 'info', msg: entry.label };
+    }
   }
 
   /** Raw TX/RX frame from the protocol. */
@@ -71,8 +113,14 @@ export class LogStore {
   /** Generic informational message. */
   info(msg: string): number { return this.#push({ kind: 'info', msg }); }
 
+  /** Warning message. */
+  warn(msg: string): number { return this.#push({ kind: 'warn', msg }); }
+
   /** Error message. */
   error(msg: string): number { return this.#push({ kind: 'error', msg }); }
 
-  clear(): void { this.entries.value = []; }
+  clear(): void {
+    this.entries.value = [];
+    this.#protocolEntryIds.clear();
+  }
 }

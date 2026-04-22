@@ -60,12 +60,13 @@ function rawSummary(ev: LogEvent): { dir: string; text: string } {
       return { dir: '--', text: `Service discovery: ${ev.deviceName} — ${ev.services.length} svc, ${chars} char` };
     }
     case 'info':  return { dir: '--', text: ev.msg };
+    case 'warn':  return { dir: 'WW', text: ev.msg };
     case 'error': return { dir: '!!', text: ev.msg };
   }
 }
 
 const DIR_BADGE: Record<string, string> = {
-  TX: 'badge-info', RX: 'badge-success', '--': 'badge-ghost', '!!': 'badge-error',
+  TX: 'badge-info', RX: 'badge-success', '--': 'badge-ghost', WW: 'badge-warning', '!!': 'badge-error',
 };
 
 function RawEntry({ entry }: { entry: LogEntry }) {
@@ -183,6 +184,7 @@ function DiscoveryBubble({ ev, ts }: { ev: Extract<LogEvent, { kind: 'discovery'
 }
 
 const VERBOSE_INFO_RE = /^\[BLE\]|^scanning for|^reconnecting|^".*" not pre-granted/i;
+const SUPPRESS_ERROR_RE = /user cancelled|user denied|no device selected|chooser/i;
 
 function NiceEntry({ entry }: { entry: LogEntry }) {
   const { event, ts } = entry;
@@ -216,7 +218,14 @@ function NiceEntry({ entry }: { entry: LogEntry }) {
           <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-base-300 text-base-content/40">{event.msg}</span>
         </div>
       );
+    case 'warn':
+      return (
+        <div class="flex justify-center my-0.5 z-10 relative">
+          <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-base-300 text-warning">{event.msg}</span>
+        </div>
+      );
     case 'error':
+      if (SUPPRESS_ERROR_RE.test(event.msg)) return null;
       return (
         <div class="flex justify-center my-0.5 z-10 relative">
           <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-base-300 text-error">{event.msg}</span>
@@ -240,6 +249,9 @@ function NiceLog() {
       </div>
       <div class="relative flex flex-col flex-1 py-2">
         <div class="absolute inset-y-0 left-1/2 w-px bg-base-300/70 -translate-x-1/2 pointer-events-none" />
+        <div class="sticky top-0 z-10 flex justify-center pointer-events-none" style="margin-top: -1px">
+          <div class="w-2.5 h-2.5 rounded-full bg-base-content/30 border-2 border-base-100 -mt-1" />
+        </div>
         {entries.length === 0 && (
           <p class="text-xs text-base-content/25 text-center py-8">No frames yet.</p>
         )}

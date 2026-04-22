@@ -1,18 +1,21 @@
 /**
  * BleManager — owns the BleDevice instance and connection lifecycle.
  */
+import { effect } from '@preact/signals';
 import { BleDevice } from './BleDevice.js';
 import type { DiscoveredService } from './BleDevice.js';
-import type { Protocol, KnownDevice, AudioFormat } from '@ainote/protocols';
-import type { LogDir } from '../store/log.js';
+import type { Protocol } from '@ainote/protocols';
+import { ProtocolRegistry } from '@ainote/protocols';
+import type { KnownDevice } from '../store/persistence.js';
 import { store } from '../store/index.js';
-import { stop, stopVisualizer, startStreaming, pushFrame } from '../audio/player.js';
-
-type ProtocolRegistry = Record<string, Protocol>;
+import { pushFrame, startStreaming, stop, stopVisualizer } from '../audio/player.js';
 
 export class BleManager {
   private _ble:       BleDevice;
   private _protocols: ProtocolRegistry;
+  private _disposeProtoLog: (() => void) | null = null;
+  private _disposeProtoStream: (() => void) | null = null;
+  private _disposeProtoState: (() => void) | null = null;
 
   get device(): BleDevice { return this._ble; }
 
@@ -25,7 +28,7 @@ export class BleManager {
     if (store.connection.state.value !== 'idle') return;
     store.connection.state.value = 'scanning';
     try {
-      const allProtos  = Object.values(this._protocols);
+      const allProtos  = this._protocols.all();
       const allOptional = [...new Set(allProtos.flatMap(p => p.optionalServices))];
       const prefixes   = [...new Set(allProtos.flatMap(p => p.nameFilters))];
       const svcUuids   = [...new Set(allProtos.flatMap(p => p.filterServices))];
@@ -64,8 +67,65 @@ export class BleManager {
     this._ble.disconnect();
   }
 
+  private _detachProtocolRuntime(): void {
+    this._disposeProtoLog?.();
+    this._disposeProtoLog = null;
+    this._disposeProtoStream?.();
+    this._disposeProtoStream = null;
+    this._disposeProtoState?.();
+    this._disposeProtoState = null;
+    store.device.reset();
+  }
+
+  private _attachProtocolRuntime(proto: Protocol): void {
+    this._detachProtocolRuntime();
+
+    store.device.protocolLabel.value = proto.label;
+    store.device.audioFormat.value = proto.audioFormat;
+    store.device.commands.value = proto.commands;
+    store.device.supportsFiles.value = proto.hasFiles();
+    store.device.supportsRecording.value = proto.hasRecord();
+    store.device.supportsStreaming.value = proto.hasStream();
+
+    this._disposeProtoState = effect(() => {
+      store.device.stateTiles.value = proto.stateTiles.value;
+      store.device.battery.value = proto.hasBattery() ? proto.battery.value : null;
+      store.device.storage.value = proto.hasStorage() ? proto.storage.value : null;
+      store.device.deviceInfo.value = proto.hasDeviceInfo() ? proto.deviceInfo.value : null;
+      store.device.files.value = proto.hasFiles() ? proto.files.value : [];
+      store.device.downloadProgress.value = proto.hasFiles() ? proto.downloadProgress.value : null;
+    });
+
+    this._disposeProtoLog = effect(() => {
+      for (const entry of proto.log.value) {
+        store.log.protocol(entry);
+      }
+    });
+
+    if (proto.hasStream()) {
+      let streamStarted = false;
+      this._disposeProtoStream = effect(() => {
+        const chunk = proto.streamData.value;
+        if (chunk) {
+          if (!streamStarted) {
+            store.audio.visible.value = true;
+            store.audio.codec.value = proto.audioFormat;
+            startStreaming(proto.audioFormat);
+            streamStarted = true;
+          }
+          pushFrame(chunk);
+          return;
+        }
+        if (streamStarted) {
+          stop();
+          streamStarted = false;
+        }
+      });
+    }
+  }
+
   private _activeProto(): Protocol | undefined {
-    return this._protocols[store.connection.activeProtoId.value];
+    return this._protocols.get(store.connection.activeProtoId.value);
   }
 
   private async _getGrantedDevice(id: string): Promise<BluetoothDevice | null> {
@@ -84,7 +144,7 @@ export class BleManager {
       store.connection.label.value = name;
 
       const uuids    = ble.discoveredServiceUuids;
-      const detected = Object.entries(this._protocols)
+      const detected = this._protocols.entries()
         .find(([, p]) => p.identify(name, uuids));
       if (detected) {
         store.connection.activeProtoId.value = detected[0];
@@ -96,19 +156,7 @@ export class BleManager {
       store.persistence.saveKnown(ble.id ?? '', name, store.connection.activeProtoId.value);
       const proto = this._activeProto();
       if (proto) {
-        proto.init({
-          log: (dir: string, bytes: Uint8Array, label = '') => {
-            if (dir === 'TX' || dir === 'RX') return store.log.frame(dir as LogDir, bytes, label);
-            if (dir === '!!') return store.log.error(label);
-            return store.log.info(label);
-          },
-          updateLog: (id: number, label: string) => store.log.updateFrame(id, label),
-          audioFrame:     (chunk: Uint8Array)                              => pushFrame(chunk),
-          startStreaming: (fmt: AudioFormat)                               => startStreaming(fmt),
-          stopStreaming:  ()                                               => stop(),
-          setAudioFormat: (fmt: AudioFormat) => { store.audio.codec.value = fmt; },
-          showAudio:      ()                 => { store.audio.visible.value = true; },
-        });
+        this._attachProtocolRuntime(proto);
         void proto.connect(ble).catch(err => store.log.error(`init: ${(err as Error).message}`));
       }
     });
@@ -131,6 +179,7 @@ export class BleManager {
     ble.addEventListener('disconnected', () => {
       const proto = this._activeProto();
       const name  = store.connection.label.value || 'Device';
+      this._detachProtocolRuntime();
       proto?.disconnect();
       store.connection.state.value   = 'idle';
       store.connection.label.value   = '';
